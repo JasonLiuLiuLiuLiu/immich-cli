@@ -11,7 +11,7 @@ await Parser.Default.ParseArguments<Options>(args)
                        client.ApiKey = o.Key;
                        var options = new UploadOptionsDto();
                        options.Recursive = true;
-                       options.Album=o.Album;
+                       options.Album = o.Album;
                        var uploadCommand = new UploadCommand(client);
-                       await uploadCommand.Run([o.Path], options);
+                       await uploadCommand.Run(o.Path, options);
                    });

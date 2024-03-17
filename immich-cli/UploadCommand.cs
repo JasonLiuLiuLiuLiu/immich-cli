@@ -24,10 +24,12 @@ namespace immich_cli
         public string SidecarPath { get; private set; }
         public long? FileSize { get; private set; }
         public string AlbumName { get; set; }
+        public string RootPath { get; set; }
 
-        public Asset(string path)
+        public Asset(string path, string rootPath)
         {
             Path = path;
+            RootPath = rootPath;
         }
 
         public async Task Prepare()
@@ -78,11 +80,6 @@ namespace immich_cli
             return formData;
         }
 
-        public async Task Delete()
-        {
-            File.Delete(Path);
-        }
-
         public async Task<string> Hash()
         {
             using (var stream = new FileStream(Path, FileMode.Open, FileAccess.Read))
@@ -95,9 +92,9 @@ namespace immich_cli
 
         private string ExtractAlbumName()
         {
-            return Environment.OSVersion.Platform == PlatformID.Win32NT
-                ? Path.Split('\\')[^2]
-                : Path.Split('/')[^2];
+            var subPath = Path.Substring(Path.IndexOf(RootPath) + RootPath.Length, Path.Length - RootPath.Length);
+            subPath = subPath.TrimStart('/').TrimStart('\\');
+            return subPath.Split(Environment.OSVersion.Platform == PlatformID.Win32NT ? '\\' : '/')[0];
         }
     }
 
@@ -105,7 +102,7 @@ namespace immich_cli
     {
         public bool Recursive { get; set; } = false;
         public bool DryRun { get; set; } = false;
-        public bool SkipHash { get; set; } = false;
+        public bool SkipHash { get; set; } = true;
         public bool Album { get; set; } = false;
         public string AlbumName { get; set; } = "";
         public bool IncludeHidden { get; set; } = false;
@@ -118,11 +115,11 @@ namespace immich_cli
 
         public UploadCommand(ImmichClient api) { this.api = api; }
 
-        public async Task Run(string[] paths, UploadOptionsDto options)
+        public async Task Run(string path, UploadOptionsDto options)
         {
 
             Console.WriteLine("Crawling for assets...");
-            var files = await GetFiles(paths, options);
+            var files = await GetFiles([path], options);
 
             if (files.Count == 0)
             {
@@ -130,9 +127,17 @@ namespace immich_cli
                 return;
             }
 
-            var assetsToCheck = files.Select(path => new Asset(path)).ToList();
+            var assetsToCheck = files.Select(f => new Asset(f, path)).ToList();
 
-            var checkResult = await CheckAssets(assetsToCheck, options.Concurrency);
+            await Parallel.ForEachAsync(assetsToCheck, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.Concurrency
+            }, async (asset, _) =>
+            {
+                await asset.Prepare();
+            });
+
+            var checkResult = await CheckAssets(assetsToCheck, options.Concurrency, options.SkipHash);
 
             var totalUploaded = await Upload(checkResult.NewAssets, options);
             var messageStart = options.DryRun ? "Would have" : "Successfully";
@@ -153,16 +158,12 @@ namespace immich_cli
             }
         }
 
-        public async Task<(List<Asset> NewAssets, List<Asset> DuplicateAssets, List<Asset> RejectedAssets)> CheckAssets(List<Asset> assetsToCheck, int concurrency)
+        public async Task<(List<Asset> NewAssets, List<Asset> DuplicateAssets, List<Asset> RejectedAssets)> CheckAssets(List<Asset> assetsToCheck, int concurrency, bool skipCheck)
         {
-            await Parallel.ForEachAsync(assetsToCheck, new ParallelOptions
+            if (skipCheck)
             {
-                MaxDegreeOfParallelism = concurrency
-            }, async (asset, _) =>
-            {
-                await asset.Prepare();
-            });
-
+                return (assetsToCheck, new List<Asset>(), new List<Asset>());
+            }
             var preMsg = "Checking assets";
             var newAssets = new ConcurrentBag<Asset>();
             var duplicateAssets = new ConcurrentBag<Asset>();
@@ -192,12 +193,12 @@ namespace immich_cli
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
 
-                            Console.WriteLine(preMsg + assets[0].Path);
+                            Console.WriteLine(preMsg + ":  " + assets[0].Path);
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(preMsg + ex.Message + assets[0].Path);
+                        Console.WriteLine(preMsg + ":  " + ex.Message + assets[0].Path);
                     }
                 });
             }
@@ -224,6 +225,9 @@ namespace immich_cli
 
             var preMsg = "Uploading assets";
 
+            var index = 0;
+            var total = assetsToUpload.Count;
+
             try
             {
                 await Parallel.ForEachAsync(assetsToUpload, new ParallelOptions
@@ -233,14 +237,14 @@ namespace immich_cli
                 {
                     try
                     {
+                        Interlocked.Increment(ref index);
                         var id = await UploadAsset(asset);
                         asset.Id = id;
-
-                        Console.WriteLine(preMsg + asset.Path);
+                        Console.WriteLine(preMsg + $"({index}/{total}):" + asset.Path);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(preMsg + $"{asset.Path} failed with exception {ex.Message}");
+                        Console.WriteLine(preMsg + $"({index}/{total}):" + $"{asset.Path} failed with exception {ex.Message}");
                     }
                 });
             }
@@ -440,7 +444,7 @@ namespace immich_cli
                         existingAlbums[item.albumName] = item.albumId;
                     }
 
-                    Console.WriteLine(preMsg + albumNames.Count());
+                    Console.WriteLine(preMsg + ":  " + albumNames.Count());
                 }
             }
             finally
@@ -475,17 +479,17 @@ namespace immich_cli
 
                     if (existingAlbumsId2Name.ContainsKey(item.Key))
                     {
-                        Console.WriteLine(preMsg + existingAlbumsId2Name[item.Key]);
+                        Console.WriteLine(preMsg + ":  " + existingAlbumsId2Name[item.Key]);
                     }
                     else
                     {
-                        Console.WriteLine(preMsg + item.Key);
+                        Console.WriteLine(preMsg + ":  " + item.Key);
                     }
                 }
             }
             finally
             {
-               
+
             }
 
             return (newAlbums.Count, assetsToUpdate.Count);
@@ -498,7 +502,8 @@ namespace immich_cli
             var albumMapping = new Dictionary<string, string>();
             foreach (var album in existingAlbums)
             {
-                albumMapping.Add(album.AlbumName, album.Id);
+                if (!albumMapping.ContainsKey(album.AlbumName))
+                    albumMapping.Add(album.AlbumName, album.Id);
             }
 
             return albumMapping;
