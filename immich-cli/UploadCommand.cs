@@ -2,6 +2,7 @@
 using OpenAPI;
 using ShellProgressBar;
 using System;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
@@ -181,11 +182,12 @@ namespace immich_cli
             });
 
             var checkProgress = new ProgressBar(assetsToCheck.Count, "Checking assets");
-            var newAssets = new List<Asset>();
-            var duplicateAssets = new List<Asset>();
-            var rejectedAssets = new List<Asset>();
+            var newAssets = new ConcurrentBag<Asset>();
+            var duplicateAssets = new ConcurrentBag<Asset>();
+            var rejectedAssets = new ConcurrentBag<Asset>();
             try
             {
+                var tickLock = new object();
                 await Parallel.ForEachAsync(assetsToCheck.Chunk(concurrency), new ParallelOptions
                 {
                     MaxDegreeOfParallelism = concurrency
@@ -208,12 +210,18 @@ namespace immich_cli
                             {
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
-                            checkProgress.Tick(assets.Length);
+                            lock (tickLock)
+                            {
+                                checkProgress.Tick(assets.Length);
+                            }
                         }
                     }
                     catch (Exception ex)
                     {
-                        checkProgress.Tick(assets.Length, ex.Message);
+                        lock (tickLock)
+                        {
+                            checkProgress.Tick(assets.Length, ex.Message);
+                        }
                     }
                 });
             }
@@ -222,7 +230,7 @@ namespace immich_cli
                 checkProgress.Dispose();
             }
 
-            return (newAssets, duplicateAssets, rejectedAssets);
+            return (newAssets.ToList(), duplicateAssets.ToList(), rejectedAssets.ToList());
         }
 
         public async Task<int> Upload(List<Asset> assetsToUpload, UploadOptionsDto options)
