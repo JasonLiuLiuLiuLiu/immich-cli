@@ -1,6 +1,5 @@
 ﻿using Newtonsoft.Json;
 using OpenAPI;
-using ShellProgressBar;
 using System;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
@@ -164,7 +163,7 @@ namespace immich_cli
                 await asset.Prepare();
             });
 
-            var checkProgress = new ProgressBar(assetsToCheck.Count, "Checking assets");
+            var preMsg = "Checking assets";
             var newAssets = new ConcurrentBag<Asset>();
             var duplicateAssets = new ConcurrentBag<Asset>();
             var rejectedAssets = new ConcurrentBag<Asset>();
@@ -193,18 +192,17 @@ namespace immich_cli
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
 
-                            checkProgress.Tick(assets[0].Path);
+                            Console.WriteLine(preMsg + assets[0].Path);
                         }
                     }
                     catch (Exception ex)
                     {
-                        checkProgress.Tick(ex.Message);
+                        Console.WriteLine(preMsg + ex.Message + assets[0].Path);
                     }
                 });
             }
             finally
             {
-                checkProgress.Dispose();
             }
 
             return (newAssets.ToList(), duplicateAssets.ToList(), rejectedAssets.ToList());
@@ -224,7 +222,7 @@ namespace immich_cli
                 return (int)totalSize;
             }
 
-            using var uploadProgress = new ProgressBar(assetsToUpload.Count, "Uploading assets");
+            var preMsg = "Uploading assets";
 
             try
             {
@@ -238,17 +236,17 @@ namespace immich_cli
                         var id = await UploadAsset(asset);
                         asset.Id = id;
 
-                        uploadProgress.Tick(asset.Path);
+                        Console.WriteLine(preMsg + asset.Path);
                     }
                     catch (Exception ex)
                     {
-                        uploadProgress.Tick($"{asset.Path} failed with exception {ex.Message}");
+                        Console.WriteLine(preMsg + $"{asset.Path} failed with exception {ex.Message}");
                     }
                 });
             }
             finally
             {
-                uploadProgress.Dispose();
+
             }
 
             return assetsToUpload.Count;
@@ -429,7 +427,7 @@ namespace immich_cli
                 return (newAlbums.Count, assetsToUpdate.Count);
             }
 
-            using var albumCreationProgress = new ProgressBar(newAlbums.Count, "Creating albums");
+            var preMsg = "Creating albums";
 
             try
             {
@@ -442,12 +440,12 @@ namespace immich_cli
                         existingAlbums[item.albumName] = item.albumId;
                     }
 
-                    albumCreationProgress.Tick(albumNames.Count());
+                    Console.WriteLine(preMsg + albumNames.Count());
                 }
             }
             finally
             {
-                albumCreationProgress.Dispose();
+
             }
 
             var existingAlbumsId2Name = existingAlbums.ToDictionary(u => u.Value, u => u.Key);
@@ -466,7 +464,7 @@ namespace immich_cli
                 }
             }
 
-            using var albumUpdateProgress = new ProgressBar(assetsToUpdate.Count, "Adding assets to albums");
+            preMsg = "Adding assets to albums";
 
 
             try
@@ -477,17 +475,17 @@ namespace immich_cli
 
                     if (existingAlbumsId2Name.ContainsKey(item.Key))
                     {
-                        albumUpdateProgress.Tick(existingAlbumsId2Name[item.Key]);
+                        Console.WriteLine(preMsg + existingAlbumsId2Name[item.Key]);
                     }
                     else
                     {
-                        albumUpdateProgress.Tick();
+                        Console.WriteLine(preMsg + item.Key);
                     }
                 }
             }
             finally
             {
-                albumUpdateProgress.Dispose();
+               
             }
 
             return (newAlbums.Count, assetsToUpdate.Count);
