@@ -136,7 +136,7 @@ namespace immich_cli
 
             var checkResult = await CheckAssets(assetsToCheck, options.Concurrency);
 
-            var totalSizeUploaded = await Upload(checkResult.NewAssets, options);
+            var totalUploaded = await Upload(checkResult.NewAssets, options);
             var messageStart = options.DryRun ? "Would have" : "Successfully";
             if (checkResult.NewAssets.Count == 0)
             {
@@ -144,7 +144,7 @@ namespace immich_cli
             }
             else
             {
-                Console.WriteLine($"{messageStart} uploaded {checkResult.NewAssets.Count} asset{(checkResult.NewAssets.Count == 1 ? "" : "s")} ({totalSizeUploaded})");
+                Console.WriteLine($"{messageStart} uploaded {checkResult.NewAssets.Count} asset{(checkResult.NewAssets.Count == 1 ? "" : "s")} ({totalUploaded})");
             }
 
             if (options.Album || !string.IsNullOrEmpty(options.AlbumName))
@@ -172,10 +172,13 @@ namespace immich_cli
 
         public async Task<(List<Asset> NewAssets, List<Asset> DuplicateAssets, List<Asset> RejectedAssets)> CheckAssets(List<Asset> assetsToCheck, int concurrency)
         {
-            foreach (var assets in assetsToCheck.Chunk(concurrency))
+            await Parallel.ForEachAsync(assetsToCheck, new ParallelOptions
             {
-                await Task.WhenAll(assets.Select(asset => asset.Prepare()));
-            }
+                MaxDegreeOfParallelism = concurrency
+            }, async (asset, _) =>
+            {
+                await asset.Prepare();
+            });
 
             var checkProgress = new ProgressBar(assetsToCheck.Count, "Checking assets");
             var newAssets = new List<Asset>();
@@ -183,7 +186,10 @@ namespace immich_cli
             var rejectedAssets = new List<Asset>();
             try
             {
-                foreach (var assets in assetsToCheck.Chunk(concurrency))
+                await Parallel.ForEachAsync(assetsToCheck.Chunk(concurrency), new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = concurrency
+                }, async (assets, _) =>
                 {
                     try
                     {
@@ -202,14 +208,14 @@ namespace immich_cli
                             {
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
-                            checkProgress.Tick();
+                            checkProgress.Tick(assets.Length);
                         }
                     }
                     catch (Exception ex)
                     {
-                        checkProgress.Tick(ex.Message);
+                        checkProgress.Tick(assets.Length, ex.Message);
                     }
-                }
+                });
             }
             finally
             {
@@ -233,35 +239,34 @@ namespace immich_cli
                 return (int)totalSize;
             }
 
-            using var uploadProgress = new ProgressBar((int)totalSize, "Uploading assets");
+            using var uploadProgress = new ProgressBar(assetsToUpload.Count, "Uploading assets");
 
-            long totalSizeUploaded = 0;
             try
             {
-                foreach (var assets in assetsToUpload.Chunk(options.Concurrency))
+                await Parallel.ForEachAsync(assetsToUpload, new ParallelOptions
                 {
-                    var ids = await UploadAssets(assets);
-                    foreach (var (asset, id) in assets.Zip(ids, (asset, id) => (asset, id)))
+                    MaxDegreeOfParallelism = options.Concurrency
+                }, async (asset, _) =>
+                {
+                    try
                     {
+                        var id = await UploadAsset(asset);
                         asset.Id = id;
-                        if (asset.FileSize.HasValue)
-                        {
-                            totalSizeUploaded += asset.FileSize.Value;
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Could not determine file size for {asset.Path}");
-                        }
+
+                        uploadProgress.Tick(asset.Path);
                     }
-                    uploadProgress.Tick((int)totalSizeUploaded);
-                }
+                    catch (Exception ex)
+                    {
+                        uploadProgress.Tick($"{asset.Path} failed with exception {ex.Message}");
+                    }
+                });
             }
             finally
             {
                 uploadProgress.Dispose();
             }
 
-            return (int)totalSizeUploaded;
+            return assetsToUpload.Count;
         }
 
         public async Task<List<string>> GetFiles(string[] paths, UploadOptionsDto options)
@@ -321,14 +326,9 @@ namespace immich_cli
             return checkResponse.Results.ToList();
         }
 
-        public async Task<string[]> UploadAssets(Asset[] assets)
-        {
-            return await Task.WhenAll(assets.Select(ass => UploadAsset(ass)));
-        }
-
         public async Task<string> UploadAsset(Asset asset)
         {
-           
+
             using var content = new MultipartFormDataContent();
 
             if (string.IsNullOrEmpty(asset.DeviceAssetId))
@@ -338,8 +338,8 @@ namespace immich_cli
             if (!asset.FileModifiedAt.HasValue)
                 throw new Exception("File modified at not set");
 
-           
-           
+
+
             try
             {
                 // TODO: Doesn't XMP replace the file extension? Will need investigation
@@ -353,8 +353,8 @@ namespace immich_cli
             content.Add(new StringContent("CLI"), "deviceId");
             content.Add(new StringContent(asset.FileCreatedAt.Value.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")), "fileCreatedAt");
             content.Add(new StringContent(asset.FileModifiedAt.Value.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")), "fileModifiedAt");
-            
-            
+
+
             content.Add(new StreamContent(File.OpenRead(asset.Path)), "assetData", Path.GetFileName(asset.Path));
 
             var url = api.BaseUrl + "/asset/upload";
@@ -366,7 +366,7 @@ namespace immich_cli
             {
                 throw new Exception(await response.Content.ReadAsStringAsync());
             }
-          
+
             var responseBody = await response.Content.ReadAsStringAsync();
             var result = JsonConvert.DeserializeObject<AssetFileUploadResponseDto>(responseBody);
             return result.Id;

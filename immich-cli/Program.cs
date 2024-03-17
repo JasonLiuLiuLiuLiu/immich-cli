@@ -10,6 +10,5 @@ client.BaseUrl = url;
 client.ApiKey = apiKey;
 var options = new UploadOptionsDto();
 options.Recursive = true;
-options.Concurrency = 1;
 var uploadCommand = new UploadCommand(client);
 await uploadCommand.Run([path], options);
