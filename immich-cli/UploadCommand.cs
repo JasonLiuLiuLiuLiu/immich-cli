@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using OpenAPI;
+using Serilog;
 using System;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
@@ -118,16 +119,19 @@ namespace immich_cli
         public async Task Run(string path, UploadOptionsDto options)
         {
 
-            Console.WriteLine("Crawling for assets...");
+            Log.Information("Crawling for assets...");
             var files = await GetFiles([path], options);
 
             if (files.Count == 0)
             {
-                Console.WriteLine("No assets found, exiting");
+                Log.Information("No assets found, exiting");
                 return;
             }
 
             var assetsToCheck = files.Select(f => new Asset(f, path)).ToList();
+
+            Log.Information($"Found {assetsToCheck.Count} files");
+            Log.Information($"Starting prepare files .....");
 
             await Parallel.ForEachAsync(assetsToCheck, new ParallelOptions
             {
@@ -137,24 +141,26 @@ namespace immich_cli
                 await asset.Prepare();
             });
 
+            Log.Information($"Prepare files done");
+
             var checkResult = await CheckAssets(assetsToCheck, options.Concurrency, options.SkipHash);
 
             var totalUploaded = await Upload(checkResult.NewAssets, options);
             var messageStart = options.DryRun ? "Would have" : "Successfully";
             if (checkResult.NewAssets.Count == 0)
             {
-                Console.WriteLine("All assets were already uploaded, nothing to do.");
+                Log.Information("All assets were already uploaded, nothing to do.");
             }
             else
             {
-                Console.WriteLine($"{messageStart} uploaded {checkResult.NewAssets.Count} asset{(checkResult.NewAssets.Count == 1 ? "" : "s")} ({totalUploaded})");
+                Log.Information($"{messageStart} uploaded {checkResult.NewAssets.Count} asset{(checkResult.NewAssets.Count == 1 ? "" : "s")} ({totalUploaded})");
             }
 
             if (options.Album || !string.IsNullOrEmpty(options.AlbumName))
             {
                 var albumUpdateResult = await UpdateAlbums(checkResult.NewAssets.Concat(checkResult.DuplicateAssets).ToList(), options);
-                Console.WriteLine($"{messageStart} created {albumUpdateResult.CreatedAlbumCount} new album{(albumUpdateResult.CreatedAlbumCount == 1 ? "" : "s")}");
-                Console.WriteLine($"{messageStart} updated {albumUpdateResult.UpdatedAssetCount} asset{(albumUpdateResult.UpdatedAssetCount == 1 ? "" : "s")}");
+                Log.Information($"{messageStart} created {albumUpdateResult.CreatedAlbumCount} new album{(albumUpdateResult.CreatedAlbumCount == 1 ? "" : "s")}");
+                Log.Information($"{messageStart} updated {albumUpdateResult.UpdatedAssetCount} asset{(albumUpdateResult.UpdatedAssetCount == 1 ? "" : "s")}");
             }
         }
 
@@ -193,12 +199,12 @@ namespace immich_cli
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
 
-                            Console.WriteLine(preMsg + ":  " + assets[0].Path);
+                            Log.Information(preMsg + ":  " + assets[0].Path);
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(preMsg + ":  " + ex.Message + assets[0].Path);
+                        Log.Information(preMsg + ":  " + ex.Message + assets[0].Path);
                     }
                 });
             }
@@ -240,11 +246,11 @@ namespace immich_cli
                         Interlocked.Increment(ref index);
                         var id = await UploadAsset(asset);
                         asset.Id = id;
-                        Console.WriteLine(preMsg + $"({index}/{total}):" + asset.Path);
+                        Log.Information(preMsg + $"({index}/{total}):" + asset.Path);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine(preMsg + $"({index}/{total}):" + $"{asset.Path} failed with exception {ex.Message}");
+                        Log.Information(preMsg + $"({index}/{total}):" + $"{asset.Path} failed with exception {ex.Message}");
                     }
                 });
             }
@@ -437,14 +443,22 @@ namespace immich_cli
             {
                 foreach (var albumNames in newAlbums.Chunk(options.Concurrency))
                 {
-                    var newAlbumIds = await Task.WhenAll(albumNames.Select(albumName => api.CreateAlbumAsync(new CreateAlbumDto { AlbumName = albumName }).ContinueWith(task => task.Result.Id)));
-
-                    foreach (var item in albumNames.Zip(newAlbumIds, (albumName, albumId) => (albumName, albumId)))
+                    try
                     {
-                        existingAlbums[item.albumName] = item.albumId;
-                    }
+                        var newAlbumIds = await Task.WhenAll(albumNames.Select(albumName => api.CreateAlbumAsync(new CreateAlbumDto { AlbumName = albumName }).ContinueWith(task => task.Result.Id)));
 
-                    Console.WriteLine(preMsg + ":  " + albumNames.Count());
+                        foreach (var item in albumNames.Zip(newAlbumIds, (albumName, albumId) => (albumName, albumId)))
+                        {
+                            existingAlbums[item.albumName] = item.albumId;
+                        }
+
+                        Log.Information(preMsg + ":  " + albumNames.Count());
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(preMsg, ex);
+                    }
+                   
                 }
             }
             finally
@@ -475,16 +489,24 @@ namespace immich_cli
             {
                 foreach (var item in albumToAssets)
                 {
-                    await api.AddAssetsToAlbumAsync(new Guid(item.Key), null, new BulkIdsDto { Ids = item.Value.Select(u => new Guid(u)).ToArray() });
+                    try
+                    {
+                        await api.AddAssetsToAlbumAsync(new Guid(item.Key), null, new BulkIdsDto { Ids = item.Value.Select(u => new Guid(u)).ToArray() });
 
-                    if (existingAlbumsId2Name.ContainsKey(item.Key))
-                    {
-                        Console.WriteLine(preMsg + ":  " + existingAlbumsId2Name[item.Key]);
+                        if (existingAlbumsId2Name.ContainsKey(item.Key))
+                        {
+                            Log.Information(preMsg + ":  " + existingAlbumsId2Name[item.Key]);
+                        }
+                        else
+                        {
+                            Log.Information(preMsg + ":  " + item.Key);
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Console.WriteLine(preMsg + ":  " + item.Key);
+                        Log.Error(preMsg, ex);
                     }
+                   
                 }
             }
             finally

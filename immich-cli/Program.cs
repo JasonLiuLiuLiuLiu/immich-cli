@@ -1,6 +1,14 @@
 ﻿using CommandLine;
 using immich_cli;
 using OpenAPI;
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .WriteTo.Console()
+    .WriteTo.File("logs/log.txt", rollOnFileSizeLimit: true)
+    .CreateLogger();
+
 
 await Parser.Default.ParseArguments<Options>(args)
                    .WithParsedAsync(async o =>
