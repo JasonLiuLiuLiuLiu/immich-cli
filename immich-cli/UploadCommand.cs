@@ -105,10 +105,8 @@ namespace immich_cli
     public class UploadOptionsDto
     {
         public bool Recursive { get; set; } = false;
-        public List<string> ExclusionPatterns { get; set; } = new List<string>();
         public bool DryRun { get; set; } = false;
         public bool SkipHash { get; set; } = false;
-        public bool Delete { get; set; } = false;
         public bool Album { get; set; } = false;
         public string AlbumName { get; set; } = "";
         public bool IncludeHidden { get; set; } = false;
@@ -154,21 +152,6 @@ namespace immich_cli
                 Console.WriteLine($"{messageStart} created {albumUpdateResult.CreatedAlbumCount} new album{(albumUpdateResult.CreatedAlbumCount == 1 ? "" : "s")}");
                 Console.WriteLine($"{messageStart} updated {albumUpdateResult.UpdatedAssetCount} asset{(albumUpdateResult.UpdatedAssetCount == 1 ? "" : "s")}");
             }
-
-            if (!options.Delete)
-            {
-                return;
-            }
-
-            if (options.DryRun)
-            {
-                Console.WriteLine("Would now have deleted assets, but skipped due to dry run");
-                return;
-            }
-
-            //Console.WriteLine("Deleting assets that have been uploaded...");
-
-            //await DeleteAssets(checkResult.NewAssets, options);
         }
 
         public async Task<(List<Asset> NewAssets, List<Asset> DuplicateAssets, List<Asset> RejectedAssets)> CheckAssets(List<Asset> assetsToCheck, int concurrency)
@@ -187,7 +170,6 @@ namespace immich_cli
             var rejectedAssets = new ConcurrentBag<Asset>();
             try
             {
-                var tickLock = new object();
                 await Parallel.ForEachAsync(assetsToCheck.Chunk(concurrency), new ParallelOptions
                 {
                     MaxDegreeOfParallelism = concurrency
@@ -210,18 +192,13 @@ namespace immich_cli
                             {
                                 rejectedAssets.Add(checkedAsset.Asset);
                             }
-                            lock (tickLock)
-                            {
-                                checkProgress.Tick(assets.Length);
-                            }
+
+                            checkProgress.Tick(assets[0].Path);
                         }
                     }
                     catch (Exception ex)
                     {
-                        lock (tickLock)
-                        {
-                            checkProgress.Tick(assets.Length, ex.Message);
-                        }
+                        checkProgress.Tick(ex.Message);
                     }
                 });
             }
@@ -473,6 +450,8 @@ namespace immich_cli
                 albumCreationProgress.Dispose();
             }
 
+            var existingAlbumsId2Name = existingAlbums.ToDictionary(u => u.Value, u => u.Key);
+
             var albumToAssets = new Dictionary<string, List<string>>();
             foreach (var asset in assetsToUpdate)
             {
@@ -494,10 +473,15 @@ namespace immich_cli
             {
                 foreach (var item in albumToAssets)
                 {
-                    foreach (var assetBatch in assets.Chunk(Math.Min(1000 * (options.Concurrency), 65_000)))
+                    await api.AddAssetsToAlbumAsync(new Guid(item.Key), null, new BulkIdsDto { Ids = item.Value.Select(u => new Guid(u)).ToArray() });
+
+                    if (existingAlbumsId2Name.ContainsKey(item.Key))
                     {
-                        await api.AddAssetsToAlbumAsync(new Guid(item.Key), null, new BulkIdsDto { Ids = assetBatch.Select(u => new Guid(u.Id)).ToArray() });
-                        albumUpdateProgress.Tick(assetBatch.Count());
+                        albumUpdateProgress.Tick(existingAlbumsId2Name[item.Key]);
+                    }
+                    else
+                    {
+                        albumUpdateProgress.Tick();
                     }
                 }
             }

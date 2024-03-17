@@ -11,5 +11,7 @@ namespace immich_cli
         public string Key { get; set; }
         [Option('p', "path", Required = true, HelpText = "file path")]
         public string Path { get; set; }
+        [Option("album",Required =false,Default =false,HelpText ="create album based on path")]
+        public bool Album { get; set; }
     }
 }
