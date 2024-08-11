@@ -350,7 +350,7 @@ namespace immich_cli
 
             content.Add(new StreamContent(File.OpenRead(asset.Path)), "assetData", Path.GetFileName(asset.Path));
 
-            var url = api.BaseUrl + "/asset/upload";
+            var url = api.BaseUrl + "/assets";
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Add("x-api-key", api.ApiKey);
 
@@ -361,38 +361,8 @@ namespace immich_cli
             }
 
             var responseBody = await response.Content.ReadAsStringAsync();
-            var result = JsonConvert.DeserializeObject<AssetFileUploadResponseDto>(responseBody);
+            var result = JsonConvert.DeserializeObject<AssetMediaResponseDto>(responseBody);
             return result.Id;
-        }
-
-        public async Task<string> UploadAsset(Dictionary<string, object> data)
-        {
-            var url = api.BaseUrl + "/asset/upload";
-
-            using var client = new HttpClient();
-            using var content = new MultipartFormDataContent();
-            foreach (var (key, value) in data)
-            {
-                if (value is byte[] byteArray)
-                {
-                    content.Add(new ByteArrayContent(byteArray), key, key);
-                }
-                else
-                {
-                    content.Add(new StringContent(value.ToString()), key);
-                }
-            }
-            client.DefaultRequestHeaders.Add("x-api-key", api.ApiKey);
-
-            var response = await client.PostAsync(url, content);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new Exception(await response.Content.ReadAsStringAsync());
-            }
-
-            var responseBody = await response.Content.ReadAsStringAsync();
-            var result = JsonConvert.DeserializeObject<Dictionary<string, string>>(responseBody);
-            return result["id"];
         }
 
         private async Task<List<string>> Crawl(string[] paths, UploadOptionsDto options)
