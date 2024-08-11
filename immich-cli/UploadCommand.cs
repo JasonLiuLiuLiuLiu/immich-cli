@@ -353,7 +353,7 @@ namespace immich_cli
             var url = api.BaseUrl + "/assets";
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Add("x-api-key", api.ApiKey);
-
+            client.Timeout = TimeSpan.FromMinutes(1);
             var response = await client.PostAsync(url, content);
             if (!response.IsSuccessStatusCode)
             {
@@ -428,7 +428,7 @@ namespace immich_cli
                     {
                         Log.Error(preMsg, ex);
                     }
-                   
+
                 }
             }
             finally
@@ -476,7 +476,7 @@ namespace immich_cli
                     {
                         Log.Error(preMsg, ex);
                     }
-                   
+
                 }
             }
             finally
